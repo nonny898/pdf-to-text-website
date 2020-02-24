@@ -8,6 +8,7 @@ const app = express();
 app.use(
   bodyParser.raw({
     type: '*/*',
+    limit: '1024mb',
   })
 );
 
