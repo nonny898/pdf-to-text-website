@@ -13,3 +13,8 @@ exports.postUploadTar = (req, res, next) => {
   }
   res.status(404).end();
 };
+
+exports.pdfToText = (req, res, next) => {
+  // fs.readFile(path.join())
+  res.status(200).end();
+};
