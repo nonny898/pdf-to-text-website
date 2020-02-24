@@ -1,7 +1,8 @@
 const express = require('express');
 const multer = require('multer');
-const tar = require('tar-stream');
-const gunzip = require('gunzip-maybe')();
+const tar = require('tar');
+const fs = require('fs');
+const path = require('path');
 
 const upload = multer({ storage: multer.memoryStorage() });
 const Minio = require('minio');
@@ -28,43 +29,38 @@ app.post('/upload', upload.single('pdf'), (req, res, next) => {
       minioClient.getObject(
         'pdf',
         `${req.file.originalname}/${req.file.originalname}`,
-        (error, stream) => {
+        async (error, stream) => {
           if (error) {
             return res.status(500).send(error);
           }
-          const extract = tar.extract();
-
-          extract.on('entry', function(header, _stream, next) {
-            // header is the tar header
-            // stream is the content body (might be an empty stream)
-            // call next when you are done with this entry
-
-            _stream.on('end', function() {
-              const regex = /^[.][_]\w+/g;
-              if (regex.test(header.name)) {
-                next();
-              } else {
-                minioClient.putObject(
-                  'pdf',
-                  `${req.file.originalname}/${header.name}`,
-                  _stream._parent._overflow,
-                  error => {
-                    if (error) {
-                      return res.status(500).send(error);
-                    }
-                    next(); // ready for next entry
-                  }
-                );
+          fs.mkdirSync(path.join(process.cwd(), req.file.originalname));
+          stream.pipe(
+            tar.x({
+              cwd: path.join(process.cwd(), req.file.originalname),
+              filter: _path => {
+                const regex = /^[.][_]\w+/g;
+                if (regex.test(_path)) {
+                  return false;
+                }
+                return true;
+              },
+            })
+          );
+          const files = fs.readdirSync(
+            path.join(process.cwd(), req.file.originalname)
+          );
+          for (const file of files) {
+            minioClient.fPutObject(
+              'pdf',
+              `${req.file.originalname}/${file}`,
+              path.join(process.cwd(), req.file.originalname, file),
+              {},
+              (error, result) => {
+                if (error) return console.log(error);
+                console.log(result);
               }
-            });
-
-            _stream.resume(); // just auto drain the stream
-          });
-
-          extract.on('finish', function() {
-            // all entries read
-          });
-          stream.pipe(gunzip).pipe(extract);
+            );
+          }
         }
       );
     }
