@@ -24,7 +24,8 @@
     "minio": "^7.0.14",
     "node-celery": "^0.2.8",
     "pdf-parse": "^1.1.1",
-    "tar-stream": "^2.1.0"
+    "streamifier": "^0.1.1",
+    "tar": "^6.0.1"
   },
   "devDependencies": {
     "nodemon": "^2.0.2"
