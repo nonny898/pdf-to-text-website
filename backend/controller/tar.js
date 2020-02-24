@@ -1,8 +1,13 @@
-const fs = require('fs');
-const path = require('path');
+const tar = require('tar');
+const streamifier = require('streamifier');
 
-exports.uploadTar = (req, res, next) => {
-  console.log(req.body);
+exports.postUploadTar = (req, res, next) => {
+  streamifier
+    .createReadStream(req.body)
+    .pipe(tar.t())
+    .on('entry', entry => {
+      console.log(entry);
+    });
   res.status(200).end();
 };
 

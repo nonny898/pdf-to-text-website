@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const routes = require('./routes/index');
+
+const index = require('./routes/index');
 
 const app = express();
 
@@ -11,6 +12,6 @@ app.use(
   })
 );
 
-app.use('/', routes);
+app.use('/', index);
 
 module.exports = app;
