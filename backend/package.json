@@ -20,12 +20,13 @@
   "dependencies": {
     "amqplib": "^0.5.5",
     "body-parser": "^1.19.0",
+    "bull": "^3.13.0",
     "express": "^4.17.1",
     "gunzip-maybe": "^1.4.1",
     "minio": "^7.0.14",
     "multer": "^1.4.2",
-    "node-celery": "^0.2.8",
     "pdf-parse": "^1.1.1",
+    "rimraf": "^3.0.2",
     "streamifier": "^0.1.1",
     "tar": "^6.0.1",
     "tar-stream": "^2.1.0"

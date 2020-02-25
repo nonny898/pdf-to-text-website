@@ -3,6 +3,10 @@ const multer = require('multer');
 const tar = require('tar');
 const fs = require('fs');
 const path = require('path');
+const rimraf = require('rimraf');
+const Bull = require('bull');
+const pdf = require('pdf-parse');
+const streamToBuffer = require('stream-to-buffer');
 
 const upload = multer({ storage: multer.memoryStorage() });
 const Minio = require('minio');
@@ -17,6 +21,10 @@ const minioClient = new Minio.Client({
 
 const app = express();
 
+const myFirstQueue = new Bull('my-first-queue', {
+  redis: { host: '127.0.0.1', port: 6379 },
+});
+
 app.post('/upload', upload.single('pdf'), (req, res, next) => {
   minioClient.putObject(
     'pdf',
@@ -29,42 +37,75 @@ app.post('/upload', upload.single('pdf'), (req, res, next) => {
       minioClient.getObject(
         'pdf',
         `${req.file.originalname}/${req.file.originalname}`,
-        async (error, stream) => {
+        (error, stream) => {
           if (error) {
             return res.status(500).send(error);
           }
-          fs.mkdirSync(path.join(process.cwd(), req.file.originalname));
-          stream.pipe(
-            tar.x({
-              cwd: path.join(process.cwd(), req.file.originalname),
-              filter: _path => {
-                const regex = /^[.][_]\w+/g;
-                if (regex.test(_path)) {
-                  return false;
-                }
-                return true;
-              },
-            })
-          );
-          const files = fs.readdirSync(
-            path.join(process.cwd(), req.file.originalname)
-          );
-          for (const file of files) {
-            minioClient.fPutObject(
-              'pdf',
-              `${req.file.originalname}/${file}`,
-              path.join(process.cwd(), req.file.originalname, file),
-              {},
-              (error, result) => {
-                if (error) return console.log(error);
-                console.log(result);
-              }
-            );
+          if (!fs.existsSync(path.join(process.cwd(), req.file.originalname))) {
+            fs.mkdirSync(path.join(process.cwd(), req.file.originalname));
           }
+          stream
+            .pipe(
+              tar.x({
+                cwd: path.join(process.cwd(), req.file.originalname),
+                filter: _path => {
+                  const regex = /^[.][_]\w+/g;
+                  if (regex.test(_path)) {
+                    return false;
+                  }
+                  return true;
+                },
+              })
+            )
+            .on('finish', async () => {
+              const files = fs.readdirSync(
+                path.join(process.cwd(), req.file.originalname)
+              );
+              let i = 1;
+              for (const file of files) {
+                myFirstQueue.add({ name: file }, { priority: i });
+                await minioClient.fPutObject(
+                  'pdf',
+                  `${req.file.originalname}/${file}`,
+                  path.join(process.cwd(), req.file.originalname, file),
+                  {}
+                );
+                i += 1;
+              }
+              rimraf(path.join(process.cwd(), req.file.originalname), () => {
+                res.status(200).end();
+              });
+            });
         }
       );
     }
   );
+  myFirstQueue.process(job => {
+    minioClient.getObject(
+      'pdf',
+      `${req.file.originalname}/${job.data.name}`,
+      (error, stream) => {
+        if (error) {
+          return res.status(500).end();
+        }
+        streamToBuffer(stream, (error, buffer) => {
+          pdf(buffer).then(data => {
+            job.data.name = job.data.name.replace('.pdf', '.txt');
+            minioClient.putObject(
+              'pdf',
+              `${req.file.originalname}/${job.data.name}`,
+              data.text,
+              (error, result) => {
+                if (error) {
+                  return res.status(500).send(error);
+                }
+              }
+            );
+          });
+        });
+      }
+    );
+  });
 });
 
 minioClient.bucketExists('pdf', (error, exists) => {
