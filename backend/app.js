@@ -21,8 +21,64 @@ const minioClient = new Minio.Client({
 
 const app = express();
 
-const myFirstQueue = new Bull('my-first-queue', {
+const allTars = {};
+
+const allFinishedPdf = {};
+
+const allPdfQueue = new Bull('all-pdf-queue', {
   redis: { host: '127.0.0.1', port: 6379 },
+});
+
+allPdfQueue.process(job => {
+  minioClient.getObject(
+    'pdf',
+    `${job.data.tar}/${job.data.name}`,
+    (error, stream) => {
+      if (error) {
+        throw error;
+      }
+      streamToBuffer(stream, (error, buffer) => {
+        pdf(buffer).then(data => {
+          job.data.name = job.data.name.replace('.pdf', '.txt');
+          minioClient.putObject(
+            'pdf',
+            `${job.data.tar}/${job.data.name}`,
+            data.text,
+            (error, result) => {
+              if (error) {
+                throw error;
+              }
+              allFinishedPdf[job.data.tar].push(job.data.name);
+              if (allTars[job.data.tar].length !== 0) {
+                allPdfQueue.add(allTars[job.data.tar].shift());
+              } else {
+                for (const file of allFinishedPdf[job.data.tar]) {
+                  const writeStream = fs.createWriteStream(
+                    path.join(process.cwd(), file)
+                  );
+                  minioClient.getObject(
+                    'pdf',
+                    `${job.data.tar}/${file}`,
+                    (error, _stream) => {
+                      _stream.pipe(writeStream);
+                    }
+                  );
+                }
+                tar
+                  .c({ gzip: true }, allFinishedPdf[job.data.tar])
+                  .pipe(fs.createWriteStream('my-tarball.tgz'));
+                for (const file of allFinishedPdf[job.data.tar]) {
+                  fs.unlink(path.join(process.cwd(), file), error => {
+                    if (error) throw error;
+                  });
+                }
+              }
+            }
+          );
+        });
+      });
+    }
+  );
 });
 
 app.post('/upload', upload.single('pdf'), (req, res, next) => {
@@ -58,18 +114,28 @@ app.post('/upload', upload.single('pdf'), (req, res, next) => {
               })
             )
             .on('finish', async () => {
+              allTars[req.file.originalname] = [];
+              allFinishedPdf[req.file.originalname] = [];
               const files = fs.readdirSync(
                 path.join(process.cwd(), req.file.originalname)
               );
-              let i = 1;
+              let i = 0;
               for (const file of files) {
-                myFirstQueue.add({ name: file }, { priority: i });
                 await minioClient.fPutObject(
                   'pdf',
                   `${req.file.originalname}/${file}`,
                   path.join(process.cwd(), req.file.originalname, file),
                   {}
                 );
+                const data = {
+                  name: file,
+                  tar: req.file.originalname,
+                };
+                if (i === 0) {
+                  allPdfQueue.add(data);
+                } else {
+                  allTars[req.file.originalname].push(data);
+                }
                 i += 1;
               }
               rimraf(path.join(process.cwd(), req.file.originalname), () => {
@@ -80,37 +146,11 @@ app.post('/upload', upload.single('pdf'), (req, res, next) => {
       );
     }
   );
-  myFirstQueue.process(job => {
-    minioClient.getObject(
-      'pdf',
-      `${req.file.originalname}/${job.data.name}`,
-      (error, stream) => {
-        if (error) {
-          return res.status(500).end();
-        }
-        streamToBuffer(stream, (error, buffer) => {
-          pdf(buffer).then(data => {
-            job.data.name = job.data.name.replace('.pdf', '.txt');
-            minioClient.putObject(
-              'pdf',
-              `${req.file.originalname}/${job.data.name}`,
-              data.text,
-              (error, result) => {
-                if (error) {
-                  return res.status(500).send(error);
-                }
-              }
-            );
-          });
-        });
-      }
-    );
-  });
 });
 
 minioClient.bucketExists('pdf', (error, exists) => {
   if (error) {
-    return console.log(error);
+    throw error;
   }
   if (exists) {
     const server = app.listen(3000, () => {
@@ -119,7 +159,7 @@ minioClient.bucketExists('pdf', (error, exists) => {
   } else {
     minioClient.makeBucket('pdf', error => {
       if (error) {
-        return console.log(error);
+        throw error;
       }
       const server = app.listen(3000, () => {
         console.log('Listening on port %s...', server.address().port);
