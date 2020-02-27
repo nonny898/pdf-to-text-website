@@ -32,7 +32,7 @@ const allPdfQueue = new Bull('all-pdf-queue', {
 allPdfQueue.process(job => {
   minioClient.getObject(
     'pdf',
-    `${job.data.tar}/${job.data.name}`,
+    `${job.data.tar}/pdf/${job.data.name}`,
     (error, stream) => {
       if (error) {
         throw error;
@@ -42,36 +42,48 @@ allPdfQueue.process(job => {
           job.data.name = job.data.name.replace('.pdf', '.txt');
           minioClient.putObject(
             'pdf',
-            `${job.data.tar}/${job.data.name}`,
+            `${job.data.tar}/txt/${job.data.name}`,
             data.text,
-            (error, result) => {
+            async (error, result) => {
               if (error) {
                 throw error;
               }
               allFinishedPdf[job.data.tar].push(job.data.name);
+              job.progress(
+                (allFinishedPdf[job.data.tar].length / job.data.length) * 100
+              );
+
               if (allTars[job.data.tar].length !== 0) {
                 allPdfQueue.add(allTars[job.data.tar].shift());
               } else {
+                fs.mkdirSync('txt');
                 for (const file of allFinishedPdf[job.data.tar]) {
                   const writeStream = fs.createWriteStream(
-                    path.join(process.cwd(), file)
+                    path.join(process.cwd(), 'txt', file)
                   );
-                  minioClient.getObject(
-                    'pdf',
-                    `${job.data.tar}/${file}`,
-                    (error, _stream) => {
-                      _stream.pipe(writeStream);
-                    }
-                  );
+                  (
+                    await minioClient.getObject(
+                      'pdf',
+                      `${job.data.tar}/txt/${file}`
+                    )
+                  ).pipe(writeStream);
                 }
-                tar
-                  .c({ gzip: true }, allFinishedPdf[job.data.tar])
-                  .pipe(fs.createWriteStream('my-tarball.tgz'));
-                for (const file of allFinishedPdf[job.data.tar]) {
-                  fs.unlink(path.join(process.cwd(), file), error => {
+                tar.c({ gzip: true, file: job.data.tar }, ['txt'], error => {
+                  if (error) throw error;
+                  rimraf('txt', error => {
                     if (error) throw error;
+                    minioClient.fPutObject(
+                      'pdf',
+                      `${job.data.tar}/txt/${job.data.tar}`,
+                      path.join(process.cwd(), job.data.tar),
+                      {},
+                      error => {
+                        if (error) throw error;
+                        fs.unlinkSync(path.join(process.cwd(), job.data.tar));
+                      }
+                    );
                   });
-                }
+                });
               }
             }
           );
@@ -81,10 +93,12 @@ allPdfQueue.process(job => {
   );
 });
 
+allPdfQueue.on('progress', (job, progress) => [console.log(progress)]);
+
 app.post('/upload', upload.single('pdf'), (req, res, next) => {
   minioClient.putObject(
     'pdf',
-    `${req.file.originalname}/${req.file.originalname}`,
+    `${req.file.originalname}/pdf/${req.file.originalname}`,
     req.file.buffer,
     error => {
       if (error) {
@@ -92,7 +106,7 @@ app.post('/upload', upload.single('pdf'), (req, res, next) => {
       }
       minioClient.getObject(
         'pdf',
-        `${req.file.originalname}/${req.file.originalname}`,
+        `${req.file.originalname}/pdf/${req.file.originalname}`,
         (error, stream) => {
           if (error) {
             return res.status(500).send(error);
@@ -123,13 +137,14 @@ app.post('/upload', upload.single('pdf'), (req, res, next) => {
               for (const file of files) {
                 await minioClient.fPutObject(
                   'pdf',
-                  `${req.file.originalname}/${file}`,
+                  `${req.file.originalname}/pdf/${file}`,
                   path.join(process.cwd(), req.file.originalname, file),
                   {}
                 );
                 const data = {
                   name: file,
                   tar: req.file.originalname,
+                  length: files.length,
                 };
                 if (i === 0) {
                   allPdfQueue.add(data);
