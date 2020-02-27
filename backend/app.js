@@ -1,3 +1,4 @@
+/* eslint-disable global-require */
 const express = require('express');
 const multer = require('multer');
 const tar = require('tar');
@@ -163,6 +164,20 @@ minioClient.bucketExists('pdf', (error, exists) => {
       }
       const server = app.listen(3000, () => {
         console.log('Listening on port %s...', server.address().port);
+      });
+      const io = require('socket.io')(server);
+      io.on('connection', function(socket) {
+        console.log(socket.id);
+        socket.on('SEND_MESSAGE', function(data) {
+          console.log('Log: data', data);
+          for (let index = 0; index < 100; index += 1) {
+            io.emit('MESSAGE', {
+              user: 'test',
+              message: index.toString(),
+            });
+            console.log('Log: index.toString()', index.toString());
+          }
+        });
       });
     });
   }
