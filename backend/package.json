@@ -28,7 +28,7 @@
     "socket.io": "^2.3.0",
     "stream-to-buffer": "^0.1.0",
     "streamifier": "^0.1.1",
-    "tar": "^6.0.1"
+    "tar": "^6.1.2"
   },
   "devDependencies": {
     "nodemon": "^2.0.2"
